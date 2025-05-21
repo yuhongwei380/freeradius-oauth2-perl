@@ -32,7 +32,7 @@ These instructions assume you are familiar with using FreeRADIUS in an 802.1X en
 
 If you run into problems getting a `users` file environment to run, then please seek support from the [FreeRADIUS community](https://freeradius.org/support/) but do *not* ask there for help on how to use this module.
 
-Once you are more familiar with using FreeRADIUS and have the above working, then you should try to follow these instructions. If you run into problems then do seek non-guaranteed 'best effort' help from me through a GitHub issue including the *full* and *complete* output of `freeradius -X | tee /tmp/radiusd.log` with both client secrets and `User-Password` obscured. Do *not* send truncated output, or the output *you* think is important, if you do, it is likely your issue will be closed.
+Once you are more familiar with using FreeRADIUS and have the above working, then you should try to follow these instructions. If you run into problems then do seek non-guaranteed 'best effort' help from me through a GitHub issue including the *full* and *complete* output of `freeradius -X | tee /tmp/radiusd.log` with any client secrets, `User-Password` and `Bearer` values obscured. Do *not* send truncated output, or the output *you* think is important, if you do, it is likely your issue will be closed.
 
 If you do open a GitHub issue you *must* be either using the [packaging from Network RADIUS (process described below)](https://networkradius.com/freeradius-packages/index.html) or have compiled from source the [`v3.2.x` branch](https://github.com/FreeRADIUS/freeradius-server/tree/v3.2.x) (or [`v3.0.x` branch](https://github.com/FreeRADIUS/freeradius-server/tree/v3.0.x)). If you do not do this, for example instead use your distribution's (Redhat, Ubuntu, ...) packaging, your issue is likely to be closed as I am unable to provide Pro Bono consultancy for your organisation.
 
@@ -50,27 +50,27 @@ On the target RADIUS server, as `root` fetch a copy of the project, the recommen
 
 **N.B.** alternatively open the URL above in your browser, click on 'Clone or download' and use the 'Download ZIP'
 
-You now need to install FreeRADIUS 3.0.x as your target, and it is *strongly* recommended you use the [packages distributed by Network RADIUS](https://networkradius.com/freeradius-packages/index.html).
+You now need to install FreeRADIUS 3.2.x as your target, and it is *strongly* recommended you use the [packages distributed by Network RADIUS](https://networkradius.com/freeradius-packages/index.html).
 
-How to use Debian is described below, but the instructions should be adaptable with ease to Ubuntu and with not too much work for CentOS. Pull requests are welcomed from those who worked out how to get this working on other OS's (eg. *BSD, another Linux, macOS, ...) and/or a later version of FreeRADIUS.
+How to use Debian is described below, but the instructions should be adaptable with ease to Ubuntu and with not too much work for CentOS. Pull requests are welcomed from those who worked out how to get this working on other OS's (eg. \*BSD, another Linux, macOS, ...) and/or a later version of FreeRADIUS.
 
 ### Debian/Ubuntu
 
-Starting with a fresh empty Debian 'buster' 10.x (or Ubuntu 'bionic' 18.04) or later installation, as `root` run the following:
+Starting with a fresh empty Debian 'bookworm' 12.x (or Ubuntu 'jammy' 22.04) or later installation, as `root` run the following:
 
     apt-get update
     apt-get -y install --no-install-recommends ca-certificates curl libjson-pp-perl libwww-perl
 
 Now follow the instructions at the [FreeRADIUS Packages](https://networkradius.com/packages/#fr30) site to install their release of FreeRADIUS.
 
-You should now have a working FreeRADIUS 3.0.x installation but to verify you have done this step correctly, please run the following:
+You should now have a working FreeRADIUS 3.2.x installation but to verify you have done this step correctly, please run the following:
 
     dpkg-query --showformat '${Maintainer}\n' -W freeradius
     Network RADIUS SARL <info@networkradius.com>
 
 Confirm the output states "Network RADIUS SARL", if it lists "Debian" (or "Ubuntu") then you need to recheck what you did as it was incorrect.
 
-**N.B.** these instructions were tested a long time ago using `docker run -it --rm -v $(pwd):/opt/freeradius-oauth2-perl debian:buster-slim` and with FreeRADIUS 3.0.21, so your numbering may be different!
+**N.B.** these instructions were tested using `docker run -it --rm -v $(pwd):/opt/freeradius-oauth2-perl debian:bookworm` (and on `ubuntu:jammy`) with FreeRADIUS 3.2.3, so your numbering may be different!
 
 It is *strongly* recommended at this point you create a backup of the original configuration:
 
@@ -80,7 +80,7 @@ This will let you to track the changes you made using:
 
     diff -u -N -r /etc/freeradius.orig /etc/freeradius
 
-**N.B.** if your configuration shows to have a `3.0` (or `3.2`) directory in `/etc/freeradius` then you have *not* correctly followed the instructions above so recheck!
+**N.B.** if your configuration shows to have a `3.2` (or `3.0`) directory in `/etc/freeradius` then you have *not* correctly followed the instructions above so recheck!
 
 # Configuration
 
@@ -142,7 +142,7 @@ Edit your `/etc/freeradius/sites-enabled/default`:
  * at the end of the `authenticate` section add the `Auth-Type oauth2` stanza with `oauth2` inside
  * in the `post-auth` section add `oauth2` after the commented out `ldap` but before the `exec` module
 
-**N.B.** start with the stock/upstream packaged [`default`](https://github.com/FreeRADIUS/freeradius-server/blob/v3.0.x/raddb/sites-available/default) and *add* to it, do *not* strip or change anything until you have a working configuration. Once you have a working configuration then do explore customising it to fit your needs but if you break something this module will return `invalid` (ie. dependency on the [`suffix` module setting the `Realm` attribute](https://freeradius.org/modules/?s=realm&mod=rlm_realm))
+**N.B.** start with the stock/upstream packaged [`default`](https://github.com/FreeRADIUS/freeradius-server/blob/v3.2.x/raddb/sites-available/default) and *add* to it, do *not* strip or change anything until you have a working configuration. Once you have a working configuration then do explore customising it to fit your needs but if you break something this module will return `invalid` (ie. dependency on the [`suffix` module setting the `Realm` attribute](https://freeradius.org/modules/?s=realm&mod=rlm_realm))
 
 This should look something like:
 
@@ -218,8 +218,25 @@ This should look something like:
 
 You should edit your `/etc/freeradius/sites-enabled/inner-tunnel` file similarly to how you amended `/etc/freeradius/sites-enabled/default` above.
 
+**N.B.** start with the stock/upstream packaged [`inner-tunnel`](https://github.com/FreeRADIUS/freeradius-server/blob/v3.2.x/raddb/sites-available/inner-tunnel) and *add* to it, do *not* strip or change anything until you have a working configuration. Once you have a working configuration then do explore customising it to fit your needs but if you break something this module will return `invalid` (ie. dependency on the [`suffix` module setting the `Realm` attribute](https://freeradius.org/modules/?s=realm&mod=rlm_realm))
 
-**N.B.** start with the stock/upstream packaged [`inner-tunnel`](https://github.com/FreeRADIUS/freeradius-server/blob/v3.0.x/raddb/sites-available/inner-tunnel) and *add* to it, do *not* strip or change anything until you have a working configuration. Once you have a working configuration then do explore customising it to fit your needs but if you break something this module will return `invalid` (ie. dependency on the [`suffix` module setting the `Realm` attribute](https://freeradius.org/modules/?s=realm&mod=rlm_realm))
+#### Group Membership
+
+Not a problem specific to the module, and more a FreeRADIUS gotcha, an administrator will find themselves authenticating devices using the `inner-tunnel` virtual service but require the `OAuth2-Group` attributes to be present on the (outer) `default` virtual server to assign VLANs or `Filter-Id`.
+
+This is best done by adding the following to the `post-auth` section of your `inner-tunnel` virtual server:
+
+    post-auth {
+        ...
+
+        update outer.request {
+            &OAuth2-Group := &OAuth2-Group[*]
+        }
+
+        ....
+    }
+
+Then from the `post-auth` section of your (outer) `default` virtual server you should find the `OAuth2-Group` attributes are accessible.
 
 # Troubleshooting
 
