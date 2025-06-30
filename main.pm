@@ -74,7 +74,8 @@ radiusd::radlog(L_DBG, 'oauth2 global');
 #  * besides xlat does not work in global so %{config:...} is not accessible here
 
 my $ua = LWP::UserAgent->new;
-$ua->timeout(10);
+#$ua->timeout(10);
+$ua->timeout(30);
 $ua->env_proxy;
 $ua->agent("freeradius-oauth2-perl/0.2 (+https://github.com/jimdigriz/freeradius-oauth2-perl; ${\$ua->_agent})");
 $ua->conn_cache(LWP::ConnCache->new);
