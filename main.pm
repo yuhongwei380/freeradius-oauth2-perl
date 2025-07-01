@@ -14,8 +14,9 @@ use Time::Piece;
 
 use Data::Dumper;
 # for debug 
-use Net::SSLeay;
-$Net::SSLeay::trace = 2;
+#use Net::SSLeay;
+#$Net::SSLeay::trace = 2;
+
 # https://wiki.freeradius.org/modules/Rlm_perl#logging is wrong...
 use constant {
 	L_AUTH			=> 2,
