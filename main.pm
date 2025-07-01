@@ -13,9 +13,6 @@ use POSIX qw(setlocale LC_ALL);
 use Time::Piece;
 
 use Data::Dumper;
-#debug
-use Net::SSLeay;
-$Net::SSLeay::trace = 2;
 
 # https://wiki.freeradius.org/modules/Rlm_perl#logging is wrong...
 use constant {
