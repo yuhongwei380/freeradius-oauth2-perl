@@ -90,20 +90,13 @@ sub get_cert_thumbprint {
 
     my $content = read_file($file_path);
     
-    # 提取证书部分 (适配 PEM 格式)
-    my ($cert_body) = $content =~ /-----BEGIN CERTIFICATE-----(.+?)-----END CERTIFICATE-----/s;
-    unless ($cert_body) {
-        # 尝试直接处理可能是 DER 格式或者是没有 header 的 base64
-        # 但通常 PEM 都有 header，如果没有匹配到，尝试直接用整个文件内容（容错）
-        $cert_body = $content; 
-    }
+    # 提取证书内容：去除头尾和换行符
+    # 适配 PEM 格式 -----BEGIN CERTIFICATE-----
+    $content =~ s/-----BEGIN CERTIFICATE-----//g;
+    $content =~ s/-----END CERTIFICATE-----//g;
+    $content =~ s/\s+//g; # 去除所有空白字符(换行、空格)
     
-    # 去除头尾和换行符，解码 Base64
-    $cert_body =~ s/-----BEGIN CERTIFICATE-----//g;
-    $cert_body =~ s/-----END CERTIFICATE-----//g;
-    $cert_body =~ s/\s+//g;
-    
-    my $der = eval { decode_base64($cert_body) };
+    my $der = eval { decode_base64($content) };
     if ($@ || !$der) {
         radiusd::radlog(L_ERR, "oauth2: Failed to decode certificate base64 from $file_path");
         return undef;
@@ -113,16 +106,22 @@ sub get_cert_thumbprint {
     my $digest = sha1($der);
     
     # 返回 Base64Url 编码
-    return encode_base64url($digest);
+    my $thumbprint = encode_base64url($digest);
+    # radiusd::radlog(L_DBG, "oauth2: Calculated x5t thumbprint: $thumbprint");
+    return $thumbprint;
 }
 
 # --- 辅助函数: 生成 Client Assertion JWT ---
-# 参数增加: cert_path
 sub generate_client_assertion {
     my ($client_id, $token_endpoint, $key_path, $cert_path) = @_;
     
     unless (-f $key_path) {
         radiusd::radlog(L_ERR, "oauth2: Key file not found at $key_path");
+        return undef;
+    }
+
+    unless ($cert_path && -f $cert_path) {
+        radiusd::radlog(L_ERR, "oauth2: Cert file path missing or file not found: " . ($cert_path || "undef"));
         return undef;
     }
 
@@ -151,7 +150,7 @@ sub generate_client_assertion {
             payload       => $payload,
             key           => \$private_key,
             alg           => 'RS256',
-            extra_headers => { x5t => $x5t } # 关键点：将指纹放入 Header
+            extra_headers => { x5t => $x5t } # 必须包含 x5t
         );
     };
     if ($@) {
@@ -169,7 +168,6 @@ sub worker {
 
 	setlocale(LC_ALL, $ENV{LC_ALL});
 
-    # 接收参数增加 $client_cert_path
 	our ($realm, $discovery_uri, $client_id, $client_secret, $client_key_path, $client_cert_path) = @_;
 	our $ttl = int($RAD_PERLCONF{ttl} || 30);
 	$ttl = 10 if ($ttl < 10);
@@ -188,7 +186,9 @@ sub worker {
 	my $r = $ua->get("${discovery_uri}/.well-known/openid-configuration");
 	unless ($r->is_success) {
 		radiusd::radlog(L_ERR, "oauth2 worker ($realm): discovery failed: ${\$r->status_line}");
-		die "discovery ($realm): ${\$r->status_line}";
+		# 暂时挂起，不直接 die 导致崩溃
+		sleep(10);
+		return; 
 	}
 	our $discovery = decode_json $r->decoded_content;
 
@@ -216,13 +216,12 @@ sub worker {
 
                 if ($client_key_path && -f $client_key_path) {
                     radiusd::radlog(L_DBG, "oauth2 worker ($realm): using certificate auth");
-                    # 调用时传入 key 和 cert 路径
                     my $jwt = generate_client_assertion($client_id, $discovery->{token_endpoint}, $client_key_path, $client_cert_path);
                     if ($jwt) {
                         $params{client_assertion_type} = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
                         $params{client_assertion} = $jwt;
                     } else {
-                        radiusd::radlog(L_ERR, "worker ($realm): failed to generate jwt");
+                        radiusd::radlog(L_ERR, "worker ($realm): failed to generate jwt, check key/cert paths");
                         return undef;
                     }
                 } else {
@@ -232,8 +231,9 @@ sub worker {
 				my $r = $ua->post($discovery->{token_endpoint}, \%params);
 				unless ($r->is_success) {
 					radiusd::radlog(L_ERR, "oauth2 worker ($realm): token failed: ${\$r->status_line}");
-                    if ($r->code == 400 || $r->code == 401) {
-                        radiusd::radlog(L_ERR, "oauth2 worker ($realm): Azure said: " . $r->decoded_content);
+                    # 仅在 debug 开启时打印详细错误，防止日志过大
+                    if (defined($RAD_PERLCONF{debug}) && $RAD_PERLCONF{debug} =~ /^(?:1|true|yes)$/i) {
+                         radiusd::radlog(L_ERR, "oauth2 worker error body: " . $r->decoded_content);
                     }
 					return undef;
 				}
@@ -248,8 +248,9 @@ sub worker {
 				my ($purpose, $uri) = @_;
                 
                 my $auth_header = &authorization();
+                # 关键修复：如果没有 Token，直接返回 undef，不要发请求
                 unless (defined($auth_header)) {
-                    radiusd::radlog(L_WARN, "oauth2 worker ($realm): Skipping $purpose sync because token is unavailable");
+                    radiusd::radlog(L_WARN, "oauth2 worker ($realm): No valid token available, skipping $purpose sync");
                     return undef;
                 }
 
@@ -266,7 +267,7 @@ sub worker {
 						return &fetch($purpose, $uri);
 					}
 					radiusd::radlog(L_WARN, "oauth2 worker ($realm): $purpose failed: ${\$r->status_line}");
-					die "token ($realm): ${\$r->status_line}" if (is_server_error($r->code));
+					# fetch 失败不应该 die，应该 return undef 让外层处理
 					return undef;
 				}
 				return decode_json $r->decoded_content;
@@ -278,7 +279,7 @@ sub worker {
 				while (defined($uri)) {
 					radiusd::radlog(L_DBG, "oauth2 worker ($realm): $purpose page");
 					my $data = &fetch($purpose, $uri);
-                    last unless defined($data);
+                    last unless defined($data); # 如果 fetch 失败，退出循环
 					&$callback($data->{value});
 					$delta = $data->{'@odata.deltaLink'};
 					$uri = $data->{'@odata.nextLink'};
@@ -385,22 +386,23 @@ sub authorize {
 			my $client_id = radiusd::xlat("%{config:realm[$realm].oauth2.client_id}");
 			my $client_secret = radiusd::xlat("%{config:realm[$realm].oauth2.client_secret}");
             my $client_key_path = radiusd::xlat("%{config:realm[$realm].oauth2.client_key_path}");
-            # 新增: 获取证书路径
             my $client_cert_path = radiusd::xlat("%{config:realm[$realm].oauth2.client_cert_path}");
-            
-            # 容错: 如果没配 cert_path，但配了 key_path，尝试默认它们在同一个文件
-            if ($client_key_path && (!$client_cert_path || $client_cert_path eq '')) {
-                $client_cert_path = $client_key_path;
-            }
+
+            radiusd::radlog(L_DBG, "oauth2 debug: key_path=$client_key_path, cert_path=$client_cert_path");
 
 			if ($client_id eq '' || ($client_secret eq '' && (!$client_key_path || ! -f $client_key_path))) {
                 radiusd::radlog(L_ERR, "oauth2: missing client_id, or both client_secret and client_key_path are missing/invalid");
                 return RLM_MODULE_FAIL;
             }
 
+            if ($client_key_path && (!defined($client_cert_path) || $client_cert_path eq '')) {
+                 radiusd::radlog(L_WARN, "oauth2: client_cert_path is MISSING in proxy.conf. Assuming it is same as key_path");
+                 $client_cert_path = $client_key_path;
+            }
+
 			$realms{$realm} = shared_clone({});
 			lock(%{$realms{$realm}});
-            # 传递 client_cert_path 给 worker
+            # 必须传6个参数
 			push @sups, threads->create(\&worker, $realm, $discovery_uri, $client_id, $client_secret, $client_key_path, $client_cert_path);
 			cond_wait(%{$realms{$realm}});
 		}
@@ -435,12 +437,10 @@ sub authenticate {
 	my $client_id = radiusd::xlat("%{config:realm[$realm].oauth2.client_id}");
 	my $client_secret = radiusd::xlat("%{config:realm[$realm].oauth2.client_secret}");
     my $client_key_path = radiusd::xlat("%{config:realm[$realm].oauth2.client_key_path}");
-    # 新增: 获取证书路径
     my $client_cert_path = radiusd::xlat("%{config:realm[$realm].oauth2.client_cert_path}");
-    
-    # 容错逻辑同上
-    if ($client_key_path && (!$client_cert_path || $client_cert_path eq '')) {
-        $client_cert_path = $client_key_path;
+
+    if ($client_key_path && (!defined($client_cert_path) || $client_cert_path eq '')) {
+         $client_cert_path = $client_key_path;
     }
 
 	radiusd::radlog(L_INFO, "oauth2 token auth for $username");
@@ -455,7 +455,7 @@ sub authenticate {
 
     if ($client_key_path && -f $client_key_path) {
         radiusd::radlog(L_DBG, "oauth2 authenticate: using certificate");
-        # 传入 key 和 cert 路径
+        # 传递 key 和 cert
         my $jwt = generate_client_assertion($client_id, $state->{t}, $client_key_path, $client_cert_path);
         if ($jwt) {
             $params{client_assertion_type} = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
